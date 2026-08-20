@@ -171,6 +171,34 @@ def cmd_probe(_: Dict[str, Any]) -> None:
         info["ultralytics"] = ultralytics.__version__
     except Exception as exc:
         info["ultralytics_error"] = str(exc)
+
+    # Where 'Self' comes from. typing_extensions aliases typing.Self on 3.11+
+    # and defines its own below that, and a frozen build that mixes the two
+    # produces "Plain typing.Self is not valid as type argument" deep inside
+    # torch rather than anything resembling an import error.
+    try:
+        import typing
+
+        import typing_extensions
+
+        info["typing_file"] = getattr(typing, "__file__", "?")
+        info["typing_has_self"] = hasattr(typing, "Self")
+        info["typing_extensions_file"] = getattr(typing_extensions, "__file__", "?")
+        info["self_repr"] = repr(getattr(typing_extensions, "Self", None))
+        try:
+            from typing import Union
+
+            class _Probe:
+                pass
+
+            Union[_Probe, typing_extensions.Self]
+            info["self_usable"] = True
+        except Exception as exc:
+            info["self_usable"] = False
+            info["self_error"] = str(exc)
+    except Exception as exc:
+        info["typing_error"] = str(exc)
+
     emit("probe", info=info)
 
 
