@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Model weights — these are downloaded on demand, never committed
+*.pt
+*.onnx
+*.engine
+*.torchscript
+weights/
+
+# Training output and generated datasets
+runs/
+datasets/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

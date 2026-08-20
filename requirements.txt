@@ -1,0 +1,12 @@
+# GUI
+PySide6>=6.6,<6.9
+
+# Training / inference. torch + torchvision come from the CUDA 12.4 index,
+# installed separately by bootstrap.ps1 so the CPU-only wheels never win.
+ultralytics>=8.3.0
+
+# Pulled in by ultralytics, pinned here so the versions are visible.
+opencv-python>=4.9
+numpy>=1.24
+pillow>=10.0
+pyyaml>=6.0
