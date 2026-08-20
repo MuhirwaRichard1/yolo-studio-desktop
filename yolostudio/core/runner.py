@@ -16,6 +16,37 @@ from typing import Any, Dict, Optional
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
+# Flag the frozen executable uses to run as a worker instead of opening the GUI.
+WORKER_FLAG = "--yolostudio-worker"
+
+
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def worker_program() -> str:
+    """The executable that runs a job.
+
+    From source that is the Python interpreter. In a frozen build it is the
+    sibling console executable: ``sys.executable`` is the windowed GUI binary,
+    and a windowed process can have no valid stdout, which is where the worker
+    writes its entire event protocol.
+    """
+    if not is_frozen():
+        return sys.executable
+    name = "yolostudio-worker.exe" if os.name == "nt" else "yolostudio-worker"
+    candidate = Path(sys.executable).parent / name
+    return str(candidate) if candidate.exists() else sys.executable
+
+
+def worker_arguments(config_path: Path) -> list:
+    """Arguments to pass to :func:`worker_program`."""
+    if is_frozen():
+        # The flag is still sent: if the worker binary is missing we fall back
+        # to re-launching the GUI executable, which dispatches on it.
+        return [WORKER_FLAG, str(config_path)]
+    return ["-u", "-m", "yolostudio.worker", str(config_path)]
+
 
 class JobRunner(QObject):
     """Runs one worker job at a time."""
@@ -58,19 +89,35 @@ class JobRunner(QObject):
         self._cfg_path = Path(name)
 
         proc = QProcess(self)
-        proc.setProgram(sys.executable)
-        proc.setArguments(["-u", "-m", "yolostudio.worker", str(self._cfg_path)])
+        proc.setProgram(worker_program())
+        proc.setArguments(worker_arguments(self._cfg_path))
+        if os.name == "nt" and is_frozen():
+            # The worker is a console binary, so Windows would pop a console
+            # window for every job. CREATE_NO_WINDOW suppresses it without
+            # touching the inherited stdout/stderr pipes.
+            try:
+                CREATE_NO_WINDOW = 0x08000000
+
+                def _no_window(args):
+                    args.flags |= CREATE_NO_WINDOW
+
+                proc.setCreateProcessArgumentsModifier(_no_window)
+            except AttributeError:
+                pass  # non-Windows Qt build; nothing to suppress
         if workdir:
             proc.setWorkingDirectory(str(workdir))
 
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONUNBUFFERED", "1")
         env.insert("PYTHONIOENCODING", "utf-8")
-        # The package lives next to this file; make sure -m can find it even when
-        # the app is launched from an unrelated working directory.
-        pkg_parent = str(Path(__file__).resolve().parents[2])
-        existing = env.value("PYTHONPATH", "")
-        env.insert("PYTHONPATH", pkg_parent + (os.pathsep + existing if existing else ""))
+        if not is_frozen():
+            # Running from source: make sure -m can find the package even when
+            # the app was launched from an unrelated working directory. A frozen
+            # build has its own import machinery and must not be handed a
+            # PYTHONPATH that could shadow bundled modules.
+            pkg_parent = str(Path(__file__).resolve().parents[2])
+            existing = env.value("PYTHONPATH", "")
+            env.insert("PYTHONPATH", pkg_parent + (os.pathsep + existing if existing else ""))
         proc.setProcessEnvironment(env)
 
         proc.readyReadStandardOutput.connect(self._on_stdout)
@@ -82,7 +129,8 @@ class JobRunner(QObject):
         proc.start()
         if not proc.waitForStarted(10000):
             self.failed.emit("Could not start the worker process.",
-                             f"Tried: {sys.executable} -m yolostudio.worker")
+                             "Tried: " + " ".join([sys.executable]
+                                                  + worker_arguments(self._cfg_path)))
             self._cleanup()
             return False
         self.started.emit()

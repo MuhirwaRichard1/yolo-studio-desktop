@@ -10,13 +10,49 @@ Everything runs locally — no accounts, no uploads, no cloud training.
 
 ---
 
-## Setup
+## Install
+
+Prebuilt packages contain everything — Python, Qt, PyTorch with CUDA,
+ultralytics — so nothing needs installing first. They are correspondingly
+large, because PyTorch with CUDA is ~4.5 GB on its own.
+
+**Windows 10/11 (x64)** — download the `-setup.exe` and run it. It installs
+per-user, so there is no admin prompt. Windows SmartScreen will warn that the
+publisher is unknown, because the binary is unsigned: choose *More info → Run
+anyway*.
+
+**Linux (x86_64)** — download the `.AppImage`, then:
+
+```bash
+chmod +x YOLOStudio-*.AppImage
+./YOLOStudio-*.AppImage
+```
+
+Built against glibc 2.35, so it runs on Ubuntu 22.04+, Debian 12+, Fedora 36+
+and similar. If it complains about FUSE, either install `libfuse2` or run it
+with `--appimage-extract-and-run`.
+
+**Both** need roughly 8 GB of free disk, and an NVIDIA driver supporting
+CUDA 12.4 (R550 or newer) for GPU training. Without a suitable driver the app
+still runs and trains, but on the CPU.
+
+Verify a download before running it:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+---
+
+## Running from source
 
 ```powershell
 cd C:\Users\USER\yolo-studio
 .\bootstrap.ps1      # creates .venv, installs CUDA PyTorch + ultralytics + PySide6
 .\run.ps1            # launches the app
 ```
+
+To build the installers yourself, see [`packaging/README.md`](packaging/README.md).
 
 `bootstrap.ps1` is safe to re-run; add `-Recreate` to rebuild the environment from
 scratch. `run.ps1 -Console` keeps the terminal attached so you can see tracebacks.

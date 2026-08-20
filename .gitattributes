@@ -1,0 +1,26 @@
+# Normalise to LF in the repository, and check out LF by default.
+#
+# Without this, a clone on Windows (core.autocrlf=true) rewrites the shell
+# scripts with CRLF. The kernel then reads "#!/usr/bin/env bash\r", fails to
+# find that interpreter, and the Linux build dies with a confusing
+# "bad interpreter" error.
+* text=auto eol=lf
+
+# Windows-native formats keep CRLF.
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.iss  text eol=crlf
+
+# Must be LF: executed by a Linux kernel or shell.
+*.sh        text eol=lf
+AppRun      text eol=lf
+*.desktop   text eol=lf
+
+# Binary assets — never touch these.
+*.png  binary
+*.ico  binary
+*.jpg  binary
+*.pt   binary
+*.onnx binary
+*.AppImage binary

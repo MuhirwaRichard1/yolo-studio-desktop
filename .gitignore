@@ -19,6 +19,14 @@ weights/
 runs/
 datasets/
 
+# Build output
+dist/
+build/
+packaging/AppDir/
+packaging/appimagetool*
+packaging/icons/*.png
+packaging/icons/*.ico
+
 # OS / editor
 Thumbs.db
 desktop.ini

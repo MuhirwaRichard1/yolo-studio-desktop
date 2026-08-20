@@ -1,0 +1,24 @@
+#!/bin/sh
+# AppImage entry point.
+#
+# Resolves its own location because an AppImage is mounted at a different path
+# on every run, then hands off to the PyInstaller bundle. The worker executable
+# sits next to the GUI one inside the same directory, which is what the app
+# looks for when it launches a job.
+set -e
+
+HERE="$(dirname "$(readlink -f "$0")")"
+APPBIN="$HERE/usr/bin"
+
+# Let the bundled Qt find its own plugins rather than a host installation,
+# which is the usual cause of "could not load the Qt platform plugin xcb".
+export QT_PLUGIN_PATH="$APPBIN/_internal/PySide6/Qt/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+unset QT_QPA_PLATFORM_PLUGIN_PATH
+
+# Wayland sessions still run this fine through XWayland; forcing xcb avoids
+# falling over on partial Wayland setups.
+if [ -z "${QT_QPA_PLATFORM:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${DISPLAY:-}" ]; then
+    export QT_QPA_PLATFORM=xcb
+fi
+
+exec "$APPBIN/YOLOStudio" "$@"

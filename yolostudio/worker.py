@@ -27,7 +27,21 @@ from typing import Any, Dict
 
 # Real stdout is reserved for the event protocol. Do this first: anything that
 # imports ultralytics afterwards inherits the redirected stream.
-_EVENTS = sys.stdout
+#
+# A frozen windowed build can start with sys.stdout/sys.stderr set to None, and
+# losing the protocol channel would make the job look like a silent hang. Fall
+# back to the raw file descriptors, then to devnull, so emit() never raises.
+def _stream(existing, fd: int):
+    if existing is not None:
+        return existing
+    try:
+        return os.fdopen(fd, "w", encoding="utf-8", buffering=1, closefd=False)
+    except (OSError, ValueError):
+        return open(os.devnull, "w", encoding="utf-8")
+
+
+_EVENTS = _stream(sys.stdout, 1)
+sys.stderr = _stream(sys.stderr, 2)
 sys.stdout = sys.stderr
 
 

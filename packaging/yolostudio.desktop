@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=YOLO Studio
+GenericName=Image Annotation and Model Training
+Comment=Annotate images and finetune YOLO models on your own GPU
+Exec=YOLOStudio %F
+Icon=yolostudio
+Terminal=false
+Categories=Graphics;Science;ArtificialIntelligence;Development;
+Keywords=annotation;yolo;object detection;segmentation;machine learning;computer vision;
+StartupNotify=true
+StartupWMClass=YOLOStudio
+MimeType=image/jpeg;image/png;image/bmp;image/webp;image/tiff;
