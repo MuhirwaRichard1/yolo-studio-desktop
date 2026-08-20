@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -92,13 +93,26 @@ def build_project(root: Path, truth: list) -> Project:
 
 
 def run_worker(config: dict, cwd: Path) -> tuple:
-    """Run the real worker the GUI uses; return (ok, events)."""
+    """Run the real worker the GUI uses; return (ok, events).
+
+    stderr goes to a file rather than a second pipe. Draining only stdout while
+    ultralytics fills the stderr pipe buffer deadlocks: the worker blocks on
+    write, so it emits no further stdout, and both processes wait on each other
+    forever. (The GUI is immune -- QProcess drains both channels via signals.)
+    """
     handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
     json.dump(config, handle, default=str)
     handle.close()
+
+    # mkstemp hands back an open descriptor; close it before reopening by name,
+    # or Windows keeps a handle and refuses to unlink the file afterwards.
+    log_fd, log_name = tempfile.mkstemp(prefix="yolostudio-worker-", suffix=".log")
+    os.close(log_fd)
+    log_path = Path(log_name)
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
         [sys.executable, "-u", "-m", "yolostudio.worker", handle.name],
-        cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=str(ROOT), stdout=subprocess.PIPE, stderr=log_file,
         text=True, encoding="utf-8", errors="replace")
 
     events = []
@@ -122,9 +136,11 @@ def run_worker(config: dict, cwd: Path) -> tuple:
         elif kind == "error":
             print(f"    ERROR: {message.get('msg')}")
             print(f"    HINT : {message.get('hint')}")
-    stderr = proc.stderr.read() if proc.stderr else ""
     proc.wait()
+    log_file.close()
+    stderr = log_path.read_text(encoding="utf-8", errors="replace")
     Path(handle.name).unlink(missing_ok=True)
+    log_path.unlink(missing_ok=True)
     ok = proc.returncode == 0 and not any(e.get("event") == "error" for e in events)
     if not ok:
         print("    --- worker stderr (tail) ---")
