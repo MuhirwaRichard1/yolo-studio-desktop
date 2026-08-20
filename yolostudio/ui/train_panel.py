@@ -64,6 +64,7 @@ class TrainPanel(QWidget):
         self._vram_gb = 16.0
         self._runner = JobRunner(self)
         self._epoch_times: List[float] = []
+        self._plotted = 0          # last epoch index drawn on the chart
         self._run_started = 0.0
         self._last_epoch_at = 0.0
         self._best_path = ""
@@ -545,6 +546,7 @@ class TrainPanel(QWidget):
         self._prepare_chart(task)
         self.log.clear()
         self._epoch_times.clear()
+        self._plotted = 0
         self._run_started = self._last_epoch_at = time.monotonic()
         self._best_path = ""
         self._save_dir = ""
@@ -616,18 +618,37 @@ class TrainPanel(QWidget):
         epoch = int(message.get("epoch", 0))
         total = max(1, int(message.get("epochs", 1)))
         metrics = message.get("metrics") or {}
-        self.chart.append(epoch, metrics)
+
+        # Ultralytics runs a final validation pass after the last epoch, which
+        # fires the same callback again with epoch == total + 1. Left alone that
+        # reads as "epoch 3/2" and pushes the bar past 100%, so fold it into the
+        # last real epoch and refresh the metrics rather than plotting a
+        # duplicate point.
+        final_pass = epoch > total
+        if final_pass:
+            epoch = total
+
+        if epoch > self._plotted:
+            self.chart.append(epoch, metrics)
+            self._plotted = epoch
 
         now = time.monotonic()
-        self._epoch_times.append(now - self._last_epoch_at)
-        self._last_epoch_at = now
-        recent = self._epoch_times[-8:]
+        if not final_pass:
+            # The trailing validation pass is not an epoch; timing it would skew
+            # both the s/epoch figure and the ETA.
+            self._epoch_times.append(now - self._last_epoch_at)
+            self._last_epoch_at = now
+        recent = self._epoch_times[-8:] or [0.0]
         per_epoch = sum(recent) / len(recent)
         remaining = max(0, total - epoch) * per_epoch
 
         self.progress.setValue(int(epoch / total * 100))
-        self.progress.setFormat(f"epoch {epoch}/{total}  —  {_hms(remaining)} left")
-        self.headline.setText(f"Epoch {epoch} of {total}")
+        if final_pass:
+            self.progress.setFormat(f"epoch {total}/{total}  —  final validation")
+            self.headline.setText("Final validation")
+        else:
+            self.progress.setFormat(f"epoch {epoch}/{total}  —  {_hms(remaining)} left")
+            self.headline.setText(f"Epoch {epoch} of {total}")
 
         parts = []
         for key in ("metrics/mAP50-95(B)", "metrics/mAP50(B)", "metrics/mAP50-95(M)"):
