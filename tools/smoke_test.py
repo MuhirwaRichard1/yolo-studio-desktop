@@ -92,6 +92,13 @@ def build_project(root: Path, truth: list) -> Project:
     return project
 
 
+def ultralytics_assets() -> str:
+    """Directory holding ultralytics' bundled sample images."""
+    import ultralytics
+
+    return str(Path(ultralytics.__file__).parent / "assets")
+
+
 def run_worker(config: dict, cwd: Path) -> tuple:
     """Run the real worker the GUI uses; return (ok, events).
 
@@ -215,22 +222,49 @@ def main() -> int:
         print(f"    best weights: {best}")
         results["train"] = ok and bool(best) and Path(best).exists()
 
-        print("\n[6/6] auto-label with the model just trained")
-        if results["train"]:
-            items = [{"image": e.path, "label": str(workdir / "pred" / f"{e.iid}.txt")}
-                     for e in project.images[:6]]
+        # The pre-labelling check runs against a COCO-pretrained model on
+        # ultralytics' own sample image. Asserting on the freshly trained model
+        # instead would test model quality, not plumbing: three epochs over a
+        # couple of dozen synthetic images legitimately detects nothing, and a
+        # green suite must not depend on a weak model getting lucky.
+        print("\n[6/6] auto-label plumbing (pretrained model, known image)")
+        assets = Path(ultralytics_assets())
+        sample = assets / "bus.jpg"
+        if sample.exists():
+            out = workdir / "pred" / "bus.txt"
             ok, events = run_worker({
-                "command": "predict", "model": best, "items": items,
-                "class_map": {"0": 0, "1": 1}, "conf": 0.15, "iou": 0.7,
-                "imgsz": 416, "device": args.device, "shape": "box",
+                "command": "predict", "model": "yolo11n.pt",
+                "items": [{"image": str(sample), "label": str(out)}],
+                # COCO person -> project class 0, COCO bus -> project class 1.
+                "class_map": {"0": 0, "5": 1}, "conf": 0.25, "iou": 0.7,
+                "imgsz": 640, "device": args.device, "shape": "box",
             }, workdir)
             summary = next((e.get("summary") for e in events
                             if e.get("event") == "result"), {})
             print(f"    {summary}")
-            results["predict"] = ok and summary.get("instances written", 0) > 0
+            written = out.read_text(encoding="utf-8").splitlines() if out.exists() else []
+            mapped_ok = all(line.split()[0] in ("0", "1") for line in written if line)
+            coords_ok = all(0.0 <= float(v) <= 1.0
+                            for line in written if line for v in line.split()[1:])
+            print(f"    {len(written)} labels, classes mapped: {mapped_ok}, "
+                  f"coords normalised: {coords_ok}")
+            results["predict"] = bool(ok and written and mapped_ok and coords_ok)
         else:
             results["predict"] = False
-            print("    skipped (training did not produce weights)")
+            print(f"    FAIL: sample image not found at {sample}")
+
+        # Informational only: what the model we just trained actually finds.
+        if results["train"]:
+            items = [{"image": e.path, "label": str(workdir / "pred2" / f"{e.iid}.txt")}
+                     for e in project.images[:6]]
+            _, events = run_worker({
+                "command": "predict", "model": best, "items": items,
+                "class_map": {"0": 0, "1": 1}, "conf": 0.05, "iou": 0.7,
+                "imgsz": 416, "device": args.device, "shape": "box",
+            }, workdir)
+            summary = next((e.get("summary") for e in events
+                            if e.get("event") == "result"), {})
+            print(f"    (informational) the {args.epochs}-epoch model found: {summary}")
 
         print("\n" + "=" * 52)
         for name, passed in results.items():
