@@ -40,6 +40,11 @@ hiddenimports += collect_submodules("ultralytics")
 hiddenimports += [
     "yolostudio.worker",
     "yolostudio.app",
+    # Python 3.10 has no typing.Self, so torch and ultralytics take it from
+    # typing_extensions. PyInstaller does not always pull the whole module in,
+    # and a partial copy shows up as "Plain typing.Self is not valid as type
+    # argument" at inference time rather than as an import error.
+    "typing_extensions",
 ]
 
 # ----------------------------------------------------------------- excludes
@@ -62,10 +67,14 @@ QT_EXCLUDES = [
     "PySide6.QtPdfWidgets",
 ]
 
+# Only exclude what is genuinely unreachable. Trimming stdlib modules to save
+# space backfires here: torch imports unittest internally (via torch.testing
+# and the dynamo stack), and excluding it produces a bundle that builds and
+# launches but cannot import torch at all -- the failure surfaces as
+# "No module named 'unittest'" on the first job, not at build time.
 excludes = QT_EXCLUDES + [
-    "tkinter", "test", "unittest", "pydoc_data",
+    "tkinter",
     "IPython", "jupyter", "notebook",
-    "torch.test", "torch.testing._internal",
 ]
 
 # ------------------------------------------------------------------ analysis

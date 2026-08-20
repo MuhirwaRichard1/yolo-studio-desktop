@@ -60,7 +60,7 @@ try {
             Write-Host "Inno Setup not found; skipping installer." -ForegroundColor Yellow
             Write-Host "  winget install --id JRSoftware.InnoSetup"
         } else {
-            Write-Host "==> compiling installer (LZMA2 over several GB — slow)" -ForegroundColor Cyan
+            Write-Host "==> compiling installer (LZMA2 over several GB - slow)" -ForegroundColor Cyan
             New-Item -ItemType Directory -Force "dist\installer" | Out-Null
             & $iscc "/DAppVersion=$Version" "packaging\installer.iss"
             if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }

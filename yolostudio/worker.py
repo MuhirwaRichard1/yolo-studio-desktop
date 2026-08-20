@@ -303,8 +303,11 @@ def cmd_predict(cfg: Dict[str, Any]) -> None:
             preds = model.predict(source=image_path, conf=conf, iou=iou, imgsz=imgsz,
                                   device=device, max_det=max_det, verbose=False)
         except Exception as exc:
+            # Include the traceback: a per-image failure is reported as one
+            # short string in the UI, which is not enough to diagnose anything
+            # that only reproduces in a packaged build.
             emit("progress", done=index, total=total, name=Path(image_path).name,
-                 error=str(exc))
+                 error=str(exc), trace=traceback.format_exc())
             continue
 
         lines = []
