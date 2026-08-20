@@ -129,10 +129,23 @@ if ($Publish) {
     if (-not $gh) { throw "gh CLI not found." }
 
     $tag = "v$Version"
-    Write-Host "==> publishing $tag" -ForegroundColor Cyan
-    $ghArgs = @("release", "create", $tag) + $assets +
-              @("--title", "YOLO Studio $Version", "--notes-file", (Join-Path $release "NOTES.md"))
-    if ($Draft) { $ghArgs += "--draft" }
+
+    # If the release already exists, add to it instead of failing. Artifacts for
+    # the two platforms are built on different machines and rarely finish
+    # together, so a second run has to be able to top up an existing release.
+    & $gh release view $tag --repo MuhirwaRichard1/yolo-studio-desktop *> $null
+    $exists = ($LASTEXITCODE -eq 0)
+
+    if ($exists) {
+        Write-Host "==> $tag exists; uploading assets to it" -ForegroundColor Cyan
+        # --clobber replaces same-named assets, so re-running is idempotent.
+        $ghArgs = @("release", "upload", $tag) + $assets + @("--clobber")
+    } else {
+        Write-Host "==> publishing $tag" -ForegroundColor Cyan
+        $ghArgs = @("release", "create", $tag) + $assets +
+                  @("--title", "YOLO Studio $Version", "--notes-file", (Join-Path $release "NOTES.md"))
+        if ($Draft) { $ghArgs += "--draft" }
+    }
 
     if (-not (Test-Path (Join-Path $release "NOTES.md"))) {
         @"
