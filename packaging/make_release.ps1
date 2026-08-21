@@ -103,11 +103,15 @@ foreach ($src in $sources) {
 Write-Host "==> writing SHA256SUMS" -ForegroundColor Cyan
 $sumFile = Join-Path $release "SHA256SUMS"
 Remove-Item $sumFile -ErrorAction SilentlyContinue
-foreach ($src in $sources) {
+# Written with LF endings and no BOM: sha256sum -c treats a trailing CR as
+# part of the filename and fails to find the file.
+$sumLines = foreach ($src in $sources) {
     $hash = (Get-FileHash $src.FullName -Algorithm SHA256).Hash.ToLower()
-    Add-Content $sumFile "$hash  $($src.Name)"
     Write-Host "  $hash  $($src.Name)"
+    "$hash  $($src.Name)"
 }
+$sumBody = if ($sumLines) { (@($sumLines) -join "`n") + "`n" } else { "" }
+[System.IO.File]::WriteAllText($sumFile, $sumBody, (New-Object System.Text.UTF8Encoding $false))
 $assets += $sumFile
 $assets += (Get-ChildItem "$release\REJOIN-*.md" -ErrorAction SilentlyContinue |
             ForEach-Object { $_.FullName })
