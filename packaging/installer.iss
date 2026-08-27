@@ -48,6 +48,13 @@ ExtraDiskSpaceRequired=0
 DirExistsWarning=no
 DisableProgramGroupPage=yes
 ShowLanguageDialog=no
+; Code signing. Activated only when the compile passes /DSign together with a
+; /Ssigntool=... definition (see packaging\build_windows.ps1). Without those the
+; installer compiles unsigned, exactly as before.
+#ifdef Sign
+SignTool=signtool
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
