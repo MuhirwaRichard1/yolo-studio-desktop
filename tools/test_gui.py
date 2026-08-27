@@ -176,14 +176,33 @@ def main() -> int:
 
         print("\nDialogs construct")
         from yolostudio.ui.autolabel_dialog import AutoLabelDialog
-        from yolostudio.ui.export_model_dialog import ExportModelDialog
+        from yolostudio.ui.export_model_dialog import (FORMATS, NPU_FORMATS,
+                                                       ExportModelDialog)
         from yolostudio.ui.new_project_dialog import NewProjectDialog
 
         dialog = AutoLabelDialog(project, [], [("cpu", "cpu")])
         check("auto-label dialog builds", dialog.table.columnCount() == 2)
         dialog.deleteLater()
         export_dialog = ExportModelDialog(project)
-        check("export dialog builds", export_dialog.format.count() == 4)
+        check("export dialog builds", export_dialog.format.count() == len(FORMATS))
+
+        # The SBC targets swap the ONNX-era switches for chip and distro
+        # pickers; getting that wrong silently sends meaningless args to the
+        # converter, so check both directions.
+        keys = [key for _, key, _ in FORMATS]
+        export_dialog.format.setCurrentIndex(keys.index("onnx"))
+        check("onnx shows graph options",
+              export_dialog.simplify.isVisibleTo(export_dialog)
+              and not export_dialog.chip.isVisibleTo(export_dialog))
+        export_dialog.format.setCurrentIndex(keys.index("rknn"))
+        check("rknn shows chip picker",
+              export_dialog.chip.isVisibleTo(export_dialog)
+              and not export_dialog.simplify.isVisibleTo(export_dialog))
+        export_dialog.format.setCurrentIndex(keys.index("horizon"))
+        check("horizon shows board picker",
+              export_dialog.board.isVisibleTo(export_dialog)
+              and not export_dialog.chip.isVisibleTo(export_dialog))
+        check("npu formats are known", NPU_FORMATS == {"rknn", "horizon"})
         export_dialog.deleteLater()
         new_dialog = NewProjectDialog(tmp)
         new_dialog.classes.setPlainText("a\nb\na\n\n")
