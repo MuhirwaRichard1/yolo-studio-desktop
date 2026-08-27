@@ -204,6 +204,26 @@ def main() -> int:
               and not export_dialog.chip.isVisibleTo(export_dialog))
         check("npu formats are known", NPU_FORMATS == {"rknn", "horizon"})
         export_dialog.deleteLater()
+
+        # Converting an imported .pt must work with no project at all, so every
+        # project-derived path has to be optional. Constructing it is most of
+        # the test: a stray self._project attribute access raises here.
+        standalone = ExportModelDialog(None)
+        check("dialog builds without a project", standalone.checkpoint.count() == 0)
+        check("standalone is titled as a conversion",
+              standalone.windowTitle() == "Convert a model", standalone.windowTitle())
+        check("no calibration source without a project",
+              standalone.calibration_source() == "")
+        check("workdir falls back to the model's folder",
+              standalone._workdir(str(tmp / "sub" / "m.pt")) == tmp / "sub")
+        standalone.format.setCurrentIndex(keys.index("rknn"))
+        check("calibration picker shown for INT8 rknn",
+              standalone._calib_row.isVisibleTo(standalone))
+        standalone.quantize.setCurrentIndex(1)          # FP16 needs no images
+        standalone._update_note()
+        check("calibration picker hidden for FP16 rknn",
+              not standalone._calib_row.isVisibleTo(standalone))
+        standalone.deleteLater()
         new_dialog = NewProjectDialog(tmp)
         new_dialog.classes.setPlainText("a\nb\na\n\n")
         check("new-project dialog dedupes classes",

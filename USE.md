@@ -193,6 +193,27 @@ retraining beats tuning nearly every time.
 | **RKNN** | The NPU on Radxa / Rockchip boards | Needs WSL; first run installs ~1 GB |
 | **D-Robotics `.bin`** | The BPU on RDK boards | Needs WSL + Docker + the vendor image |
 
+### Converting a model you did not train here
+
+`Tools → Export or convert a model…` opens with or without a project, so a `.pt`
+from anywhere can be converted without inventing a project to hang it off. Press
+**Import .pt…** and pick the file.
+
+Quantized targets still need calibration images — the toolchain has to see real
+activations to choose its scales. Next to **Calibration data**, point at either:
+
+- a **data.yaml**, if you already have a YOLO dataset; or
+- an **image folder**, which is the usual case for an imported model. A few
+  dozen images representative of what the model will actually see is enough.
+  Labels are not needed; only pixels are sampled.
+
+With no project open the field starts empty. With one open it falls back to that
+project's exported dataset, which is worth overriding whenever the imported model
+covers a different domain.
+
+**FP16 RKNN needs no calibration at all** — leave the field alone and the
+calibration row disappears.
+
 ### Single-board computer targets
 
 Neither vendor toolchain runs on Windows — `rknn-toolkit2` publishes no Windows

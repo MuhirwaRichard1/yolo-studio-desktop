@@ -472,6 +472,38 @@ def _write_horizon_calibration(images: list, dest: Path, imgsz: int) -> int:
     return written
 
 
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _descriptor_for(source: str) -> Path:
+    """Turn a calibration source into a YOLO dataset descriptor.
+
+    A data.yaml is used as given. A plain folder of images -- what you have when
+    converting an imported .pt that was never trained here -- gets a descriptor
+    synthesised beside it. Calibration only samples pixels, so images without
+    label files are fine; ultralytics counts them as backgrounds.
+    """
+    import yaml
+
+    path = Path(source)
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        raise RuntimeError(f"Calibration data not found: {source}")
+
+    images = [p for p in path.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES]
+    if not images:
+        raise RuntimeError(f"No images found under {path} to calibrate with.")
+
+    descriptor = path / "yolostudio-calibration.yaml"
+    descriptor.write_text(
+        yaml.safe_dump({"path": str(path), "train": ".", "val": ".",
+                        "names": {0: "object"}},
+                       sort_keys=False, allow_unicode=True),
+        encoding="utf-8")
+    return descriptor
+
+
 def _wsl_dataset_yaml(data_yaml: str) -> Path:
     """Rewrite a dataset descriptor so its paths resolve inside WSL.
 
@@ -522,7 +554,9 @@ def cmd_export_npu(cfg: Dict[str, Any]) -> None:
                 "See the log above for the failing step.")
 
         emit("phase", name="convert")
-        calibration = _wsl_dataset_yaml(data_yaml) if data_yaml and quantize == 8 else None
+        calibration = None
+        if data_yaml and quantize == 8:
+            calibration = _wsl_dataset_yaml(str(_descriptor_for(data_yaml)))
         script = npu.rknn_export_script(
             model_wsl=npu.to_wsl_path(model_path),
             chip=str(args.get("chip", "rk3588")),
@@ -600,7 +634,8 @@ def cmd_export_npu(cfg: Dict[str, Any]) -> None:
             raise RuntimeError(
                 "The D-Robotics toolchain always quantizes, so it needs calibration "
                 "images. Export the dataset first.")
-        images = _calibration_images(data_yaml, int(args.get("calibration_images", 50)))
+        images = _calibration_images(str(_descriptor_for(data_yaml)),
+                                     int(args.get("calibration_images", 50)))
         count = _write_horizon_calibration(images, workdir / "calibration_data", imgsz)
         print(f"[yolostudio] wrote {count} calibration samples")
 
