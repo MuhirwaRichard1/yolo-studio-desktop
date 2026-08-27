@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         # ---- tools -------------------------------------------------------
         self.act_autolabel = QAction("&Auto-label with a model…", self, shortcut="Ctrl+L")
         self.act_export_data = QAction("Export &dataset…", self, shortcut="Ctrl+E")
-        self.act_export_model = QAction("Export trained &model…", self)
+        self.act_export_model = QAction("Export or convert a &model…", self)
         self.act_goto_train = QAction("Go to &Training", self, shortcut="Ctrl+T")
 
         self.act_shortcuts = QAction("Keyboard && mouse", self, shortcut="F1")
@@ -437,9 +437,12 @@ class MainWindow(QMainWindow):
     def _update_enabled(self) -> None:
         have = self._project is not None
         for action in (self.act_save, self.act_import_files, self.act_import_folder,
-                       self.act_autolabel, self.act_export_data, self.act_export_model,
+                       self.act_autolabel, self.act_export_data,
                        self.act_reveal):
             action.setEnabled(have)
+        # Converting a .pt needs no project: the model can be imported from
+        # anywhere and the calibration data is chosen explicitly.
+        self.act_export_model.setEnabled(True)
 
     # ---------------------------------------------------------------- images
 
@@ -636,8 +639,6 @@ class MainWindow(QMainWindow):
                     "the dataset is exported automatically.")
 
     def export_model(self) -> None:
-        if self._project is None:
-            return
         ExportModelDialog(self._project, self).exec()
 
     def _on_run_finished(self, best: str) -> None:

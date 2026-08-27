@@ -37,17 +37,21 @@ NPU_FORMATS = {"rknn", "horizon"}
 
 class ExportModelDialog(QDialog):
 
-    def __init__(self, project: Project, parent: Optional[QWidget] = None):
+    def __init__(self, project: Optional[Project] = None,
+                 parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("Export trained model")
+        # Usable with no project at all, so a .pt from anywhere can be converted
+        # without first inventing a project to hang it off.
+        self.setWindowTitle("Export trained model" if project else "Convert a model")
         self.setMinimumWidth(620)
         self._project = project
         self._runner = JobRunner(self)
 
         self.checkpoint = QComboBox()
-        for path in model_catalog.find_checkpoints(project.runs_dir):
-            self.checkpoint.addItem(model_catalog.describe_checkpoint(path), str(path))
-        browse = QPushButton("Browse…")
+        if project is not None:
+            for path in model_catalog.find_checkpoints(project.runs_dir):
+                self.checkpoint.addItem(model_catalog.describe_checkpoint(path), str(path))
+        browse = QPushButton("Import .pt…")
 
         self.format = QComboBox()
         for label, key, _ in FORMATS:
@@ -86,6 +90,24 @@ class ExportModelDialog(QDialog):
 
         self.calib = QSpinBox(minimum=8, maximum=1000, value=50, singleStep=10)
 
+        # Calibration source. An imported model has no project dataset to fall
+        # back on, and even when there is one it is usually the wrong domain, so
+        # this is always explicit and always overridable.
+        self.calib_source = QLabel()
+        self.calib_source.setWordWrap(True)
+        self._calib_path = ""
+        pick_yaml = QPushButton("data.yaml…")
+        pick_dir = QPushButton("Image folder…")
+        pick_yaml.clicked.connect(self._pick_calibration_yaml)
+        pick_dir.clicked.connect(self._pick_calibration_folder)
+
+        calib_row = QHBoxLayout()
+        calib_row.addWidget(self.calib_source, 1)
+        calib_row.addWidget(pick_yaml)
+        calib_row.addWidget(pick_dir)
+        self._calib_row = QWidget()
+        self._calib_row.setLayout(calib_row)
+
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setFixedHeight(150)
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 12px;")
@@ -109,6 +131,7 @@ class ExportModelDialog(QDialog):
         form.addRow("Target chip", self.chip)
         form.addRow("Board", self.board)
         form.addRow("Precision", self.quantize)
+        form.addRow("Calibration data", self._calib_row)
         form.addRow("Calibration images", self.calib)
         self._form = form
 
@@ -135,12 +158,18 @@ class ExportModelDialog(QDialog):
         self._update_note()
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a .pt checkpoint",
-                                              str(self._project.runs_dir),
+        start = str(self._project.runs_dir) if self._project is not None else ""
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a .pt checkpoint", start,
                                               "PyTorch weights (*.pt)")
         if path:
             self.checkpoint.insertItem(0, path, path)
             self.checkpoint.setCurrentIndex(0)
+
+    def _workdir(self, model: str) -> Path:
+        """Where the worker runs. Beside the model when there is no project."""
+        if self._project is not None:
+            return self._project.root
+        return Path(model).parent
 
     def _update_note(self) -> None:
         key = self.format.currentData()
@@ -165,6 +194,8 @@ class ExportModelDialog(QDialog):
         # and ignores any count we pass, so offering the spinbox there would be
         # a control that quietly does nothing.
         self._form.setRowVisible(self.calib, key == "horizon")
+        self._form.setRowVisible(self._calib_row, self._needs_calibration(key))
+        self._update_calibration_label()
 
         if npu_target and not self.distro.currentData():
             self.note.setText(self.note.text() + "\n\nNo WSL 2 distribution was found. "
@@ -176,10 +207,43 @@ class ExportModelDialog(QDialog):
             return True                       # OpenExplorer always calibrates
         return key == "rknn" and self.quantize.currentData() == 8
 
-    def _dataset_yaml(self) -> str:
-        """The exported dataset descriptor used for INT8 calibration."""
+    def _project_dataset(self) -> str:
+        """The open project's exported descriptor, when there is one."""
+        if self._project is None:
+            return ""
         candidate = self._project.datasets_dir / "data.yaml"
         return str(candidate) if candidate.exists() else ""
+
+    def calibration_source(self) -> str:
+        """Chosen calibration data, falling back to the project's dataset."""
+        return self._calib_path or self._project_dataset()
+
+    def _pick_calibration_yaml(self) -> None:
+        start = self._calib_path or self._project_dataset() or ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose a dataset descriptor", start, "Dataset (data.yaml *.yaml *.yml)")
+        if path:
+            self._calib_path = path
+            self._update_calibration_label()
+
+    def _pick_calibration_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Choose a folder of calibration images", self._calib_path or "")
+        if path:
+            self._calib_path = path
+            self._update_calibration_label()
+
+    def _update_calibration_label(self) -> None:
+        chosen = self._calib_path
+        if chosen:
+            kind = "folder" if Path(chosen).is_dir() else "dataset"
+            self.calib_source.setText(f"{kind}: {chosen}")
+            return
+        fallback = self._project_dataset()
+        if fallback:
+            self.calib_source.setText(f"this project's dataset: {fallback}")
+        else:
+            self.calib_source.setText("none chosen — pick a data.yaml or a folder of images")
 
     def _run(self) -> None:
         model = self.checkpoint.currentData()
@@ -209,7 +273,7 @@ class ExportModelDialog(QDialog):
         self._set_status("Exporting… TensorRT builds can take several minutes.", TEXT_DIM)
         self.btn_run.setEnabled(False)
         self._runner.start({"command": "export", "model": model, "args": args},
-                           workdir=self._project.root)
+                           workdir=self._workdir(model))
 
     def _run_npu(self, model: str, key: str) -> None:
         """Start a WSL-hosted conversion for one of the SBC NPU targets."""
@@ -223,13 +287,17 @@ class ExportModelDialog(QDialog):
 
         data_yaml = ""
         if self._needs_calibration(key):
-            data_yaml = self._dataset_yaml()
+            data_yaml = self.calibration_source()
             if not data_yaml:
                 QMessageBox.warning(
                     self, "Export",
-                    "Quantizing needs calibration images, and this project has no "
-                    "exported dataset yet.\n\nRun Tools ▸ Export dataset first, or "
-                    "pick the FP16 build.")
+                    "Quantizing needs calibration images.\n\nChoose a data.yaml or a "
+                    "folder of images next to 'Calibration data', or pick the FP16 "
+                    "build, which needs none.")
+                return
+            if not Path(data_yaml).exists():
+                QMessageBox.warning(self, "Export",
+                                    f"Calibration data not found:\n{data_yaml}")
                 return
 
         args = {
