@@ -377,12 +377,251 @@ def cmd_predict(cfg: Dict[str, Any]) -> None:
                             "images seen": total})
 
 
+# Third-party modules each export format needs, and the pip name to install if
+# it is missing. ultralytics would normally pip-install these on demand, but a
+# frozen build has no pip (see the guard in main()), so the requirement has to
+# be checked up front and reported as something the user can act on.
+EXPORT_REQUIREMENTS = {
+    "onnx": [("onnx", "onnx"), ("onnxruntime", "onnxruntime")],
+    "engine": [("tensorrt", "tensorrt")],
+    "openvino": [("openvino", "openvino")],
+}
+
+
+def missing_export_modules(fmt: str, simplify: bool = False) -> list:
+    """Return the pip names of modules `fmt` needs that cannot be imported."""
+    import importlib.util
+
+    required = list(EXPORT_REQUIREMENTS.get(fmt, []))
+    if fmt == "onnx" and simplify:
+        required.append(("onnxslim", "onnxslim"))
+    return [pip_name for module, pip_name in required
+            if importlib.util.find_spec(module) is None]
+
+
 def cmd_export(cfg: Dict[str, Any]) -> None:
     from ultralytics import YOLO
 
+    args = dict(cfg.get("args", {}))
+    fmt = str(args.get("format", ""))
+
+    missing = missing_export_modules(fmt, bool(args.get("simplify")))
+    if missing:
+        joined = ", ".join(missing)
+        if getattr(sys, "frozen", False):
+            raise RuntimeError(
+                f"This build cannot export to {fmt.upper()}: {joined} "
+                f"{'is' if len(missing) == 1 else 'are'} not bundled in the "
+                f"installed application. Run YOLO Studio from source, or "
+                f"rebuild with {joined} added to packaging/yolostudio.spec.")
+        raise RuntimeError(
+            f"{fmt.upper()} export needs {joined}. Install with: pip install {' '.join(missing)}")
+
     model = YOLO(resolve_model(cfg))
-    out = model.export(**cfg.get("args", {}))
+    out = model.export(**args)
     emit("result", summary={"exported": str(out)})
+
+
+def _calibration_images(data_yaml: str, limit: int) -> list:
+    """Image paths from a YOLO data.yaml's train split, for INT8 calibration."""
+    import yaml
+
+    spec = yaml.safe_load(Path(data_yaml).read_text(encoding="utf-8")) or {}
+    root = Path(spec.get("path") or Path(data_yaml).parent)
+    train = spec.get("train") or "images/train"
+    folder = root / train if not Path(train).is_absolute() else Path(train)
+    if not folder.is_dir():
+        raise RuntimeError(f"Calibration images not found at {folder}. Export the dataset first.")
+
+    suffixes = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    images = sorted(p for p in folder.rglob("*") if p.suffix.lower() in suffixes)
+    if not images:
+        raise RuntimeError(f"No images under {folder} to calibrate with.")
+    return images[:limit]
+
+
+def _write_horizon_calibration(images: list, dest: Path, imgsz: int) -> int:
+    """Letterbox images to imgsz and write them as raw float32 NCHW.
+
+    hb_mapper reads a directory of headerless binaries, one per sample, in the
+    dtype named by `cal_data_type` -- not .npy, which would put a header in
+    front of the tensor.
+    """
+    import cv2
+    import numpy as np
+
+    dest.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for index, path in enumerate(images):
+        img = cv2.imread(str(path))
+        if img is None:
+            continue
+        height, width = img.shape[:2]
+        scale = min(imgsz / height, imgsz / width)
+        resized = cv2.resize(img, (int(round(width * scale)), int(round(height * scale))))
+        # Pad to square with 114 grey, the value ultralytics letterboxes with,
+        # so calibration sees the same borders inference will.
+        canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
+        canvas[:resized.shape[0], :resized.shape[1]] = resized
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+        tensor = rgb.transpose(2, 0, 1)[None].astype("float32")
+        tensor.tofile(str(dest / f"cal_{index:04d}.bin"))
+        written += 1
+    if not written:
+        raise RuntimeError("None of the calibration images could be read.")
+    return written
+
+
+def _wsl_dataset_yaml(data_yaml: str) -> Path:
+    """Rewrite a dataset descriptor so its paths resolve inside WSL.
+
+    dataset.export() records `path:` as a Windows location (``C:/proj/...``).
+    Read from inside the distro that is not absolute, so ultralytics resolves it
+    against its own working directory, finds no images, and the calibration pass
+    fails with an empty-dataset error that says nothing about drive letters.
+    """
+    import yaml
+    from yolostudio.core import npu
+
+    source = Path(data_yaml)
+    spec = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    root = spec.get("path")
+    if root:
+        spec["path"] = npu.to_wsl_path(str(root))
+    translated = source.with_name(f"{source.stem}.wsl.yaml")
+    translated.write_text(yaml.safe_dump(spec, sort_keys=False, allow_unicode=True),
+                          encoding="utf-8")
+    return translated
+
+
+def cmd_export_npu(cfg: Dict[str, Any]) -> None:
+    """Export for an SBC NPU by driving a Linux toolchain inside WSL."""
+    from yolostudio.core import npu
+
+    args = dict(cfg.get("args", {}))
+    target = str(args.get("target", ""))
+    imgsz = int(args.get("imgsz", 640))
+    quantize = int(args.get("quantize", 8))
+    data_yaml = args.get("data") or ""
+
+    distro = args.get("distro") or npu.default_distro()
+    if not distro:
+        raise RuntimeError(
+            "No WSL 2 distribution found. Install one with:  wsl --install -d Ubuntu")
+
+    model_path = Path(resolve_model(cfg)).resolve()
+    log = lambda line: print(line, flush=True)  # noqa: E731 - stdout is the log pane
+
+    if target == "rknn":
+        emit("phase", name="provision")
+        print(f"[yolostudio] preparing conversion environment in {distro}")
+        code = npu.run_script(distro, npu.provision_rknn_script(), log)
+        if code != 0:
+            raise RuntimeError(
+                f"Could not build the RKNN toolchain inside {distro} (exit {code}). "
+                "See the log above for the failing step.")
+
+        emit("phase", name="convert")
+        calibration = _wsl_dataset_yaml(data_yaml) if data_yaml and quantize == 8 else None
+        script = npu.rknn_export_script(
+            model_wsl=npu.to_wsl_path(model_path),
+            chip=str(args.get("chip", "rk3588")),
+            imgsz=imgsz,
+            quantize=quantize,
+            data_yaml_wsl=npu.to_wsl_path(calibration) if calibration else None,
+        )
+        code = npu.run_script(distro, script, log)
+        if code != 0:
+            raise RuntimeError(f"RKNN conversion failed (exit {code}).")
+
+        produced = model_path.parent / f"{model_path.stem}_rknn_model"
+        emit("result", summary={"exported": str(produced)})
+        return
+
+    if target == "horizon":
+        board = str(args.get("board", "RDK X5"))
+        march = npu.HORIZON_MARCH.get(board)
+        image = npu.HORIZON_IMAGE.get(board)
+        if not march:
+            raise RuntimeError(f"Unknown D-Robotics board: {board}")
+
+        emit("phase", name="check")
+        status: Dict[str, str] = {}
+
+        def collect(line: str) -> None:
+            """Split the probe's key=value lines out of its ordinary output."""
+            if "=" in line and not line.startswith(("[", " ")):
+                key, _, value = line.partition("=")
+                status[key.strip()] = value.strip()
+            else:
+                log(line)
+
+        code = npu.run_script(distro, npu.horizon_check_script(image), collect)
+        if code != 0:
+            raise RuntimeError(f"Could not query the toolchain in {distro} (exit {code}).")
+        if status.get("docker") == "missing":
+            raise RuntimeError(
+                f"Docker is not installed inside {distro}, and the D-Robotics "
+                f"toolchain ships only as a container.\n"
+                f"Install it with:  wsl -d {distro} -- curl -fsSL https://get.docker.com | sh")
+        if status.get("docker") == "nodaemon":
+            raise RuntimeError(
+                f"Docker is installed in {distro} but the daemon is not running.\n"
+                f"Start it with:  wsl -d {distro} -- sudo service docker start")
+        if status.get("image") != "present":
+            raise RuntimeError(
+                f"The OpenExplorer image '{image}' is not present in {distro}.\n"
+                f"It is not publicly pullable -- download the {board} toolchain from "
+                f"developer.d-robotics.cc, then load it with:  docker load -i <archive>.tar")
+
+        # Everything hb_mapper touches has to sit under one bind-mounted folder.
+        workdir = model_path.parent / f"{model_path.stem}_horizon_{march}"
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        emit("phase", name="onnx")
+        print(f"[yolostudio] exporting ONNX for {board} ({march})")
+        missing = missing_export_modules("onnx", simplify=True)
+        if missing:
+            raise RuntimeError(f"ONNX export needs {', '.join(missing)}.")
+        from ultralytics import YOLO
+
+        # OpenExplorer's ONNX parser tops out at opset 11, and the BPU needs a
+        # static shape with detection left to the host, so NMS stays out.
+        onnx_path = YOLO(str(model_path)).export(
+            format="onnx", imgsz=imgsz, opset=11, simplify=True,
+            dynamic=False, half=False, nms=False)
+        onnx_file = Path(onnx_path)
+        target_onnx = workdir / onnx_file.name
+        if onnx_file.resolve() != target_onnx.resolve():
+            target_onnx.write_bytes(onnx_file.read_bytes())
+
+        emit("phase", name="calibration")
+        if not data_yaml:
+            raise RuntimeError(
+                "The D-Robotics toolchain always quantizes, so it needs calibration "
+                "images. Export the dataset first.")
+        images = _calibration_images(data_yaml, int(args.get("calibration_images", 50)))
+        count = _write_horizon_calibration(images, workdir / "calibration_data", imgsz)
+        print(f"[yolostudio] wrote {count} calibration samples")
+
+        config_name = "hb_mapper_config.yaml"
+        (workdir / config_name).write_text(
+            npu.horizon_config(target_onnx.name, march, imgsz, model_path.stem),
+            encoding="utf-8")
+
+        emit("phase", name="convert")
+        code = npu.run_script(
+            distro,
+            npu.horizon_export_script(npu.to_wsl_path(workdir), image, config_name),
+            log)
+        if code != 0:
+            raise RuntimeError(f"hb_mapper failed (exit {code}). See the log above.")
+
+        produced = sorted((workdir / "output").glob("*.bin"))
+        emit("result", summary={"exported": str(produced[0]) if produced else str(workdir)})
+        return
+
+    raise RuntimeError(f"Unknown NPU target: {target!r}")
 
 
 def cmd_names(cfg: Dict[str, Any]) -> None:
@@ -403,6 +642,7 @@ COMMANDS = {
     "val": cmd_val,
     "predict": cmd_predict,
     "export": cmd_export,
+    "export_npu": cmd_export_npu,
 }
 
 
@@ -410,6 +650,21 @@ def main() -> int:
     if len(sys.argv) < 2:
         emit("error", msg="worker: missing config path")
         return 2
+
+    # ultralytics installs missing export dependencies with
+    # subprocess.run([sys.executable, "-m", "pip", "install", ...]). In a frozen
+    # build sys.executable is *this* executable, so that call re-launches the
+    # worker with "-m" as its config path. Both processes then sit there
+    # forever, which looks like an export that simply never finishes.
+    # YOLO_AUTOINSTALL=0 below stops it happening; this is the backstop for any
+    # other library that tries the same trick.
+    if sys.argv[1] == "-m":
+        emit("error",
+             msg="worker: refusing to run as 'python -m'. A dependency tried to "
+                 "install packages by re-invoking this executable, which a frozen "
+                 "build cannot do.")
+        return 2
+
     try:
         cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     except Exception as exc:
@@ -425,6 +680,12 @@ def main() -> int:
     # Keep ultralytics from phoning home or opening a settings wizard.
     os.environ.setdefault("YOLO_VERBOSE", "true")
     os.environ.setdefault("ULTRALYTICS_OFFLINE_SYNC", "1")
+
+    # No pip inside a frozen build, so auto-install can only misfire. Turning it
+    # off makes check_requirements return False instead of shelling out; the
+    # preflight in cmd_export turns that into a message naming what is missing.
+    if getattr(sys, "frozen", False):
+        os.environ["YOLO_AUTOINSTALL"] = "0"
 
     if command != "probe":
         align_weights_dir()

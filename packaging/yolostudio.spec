@@ -47,6 +47,18 @@ hiddenimports += [
     "typing_extensions",
 ]
 
+# ONNX export. ultralytics imports these lazily inside the exporter, so nothing
+# static pulls them in. Left out, ultralytics tries to pip-install them at
+# export time by re-invoking sys.executable -- which in a frozen build is the
+# worker binary itself, and the export hangs forever instead of failing.
+# See the argv guard in yolostudio/worker.py:main().
+for _pkg in ("onnx", "onnxruntime", "onnxslim"):
+    try:
+        hiddenimports += collect_submodules(_pkg)
+        datas += collect_data_files(_pkg)
+    except Exception as exc:  # not installed in this build environment
+        print(f"WARNING: {_pkg} not available, ONNX export will be missing: {exc}")
+
 # ----------------------------------------------------------------- excludes
 
 # Qt modules the app never touches. PySide6-Addons alone is several hundred MB

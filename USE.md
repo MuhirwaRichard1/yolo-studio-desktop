@@ -190,6 +190,33 @@ retraining beats tuning nearly every time.
 | **TensorRT** | Fastest on your RTX card | Builds take minutes; see below |
 | **TorchScript** | A PyTorch graph with no Python needed | Still needs libtorch |
 | **OpenVINO** | Intel CPUs and iGPUs | — |
+| **RKNN** | The NPU on Radxa / Rockchip boards | Needs WSL; first run installs ~1 GB |
+| **D-Robotics `.bin`** | The BPU on RDK boards | Needs WSL + Docker + the vendor image |
+
+### Single-board computer targets
+
+Neither vendor toolchain runs on Windows — `rknn-toolkit2` publishes no Windows
+wheels, and D-Robotics ships OpenExplorer only as a Linux container. The app
+therefore drives both inside WSL. Pick the distribution in the dialog; anything
+WSL 2 works.
+
+**RKNN (Radxa).** Choose the chip — `rk3588` for Rock 5 and CM5, `rk3576`,
+`rk3566`/`rk3568`, `rk3562`, or the INT8-only `rv1103`/`rv1106`. The first
+conversion builds a Python 3.11 environment inside the distro with
+`rknn-toolkit2` and a CPU build of torch, which takes about ten minutes; later
+runs reuse it. **INT8** needs calibration images and uses the project's exported
+dataset automatically — train once first, or pick **FP16**, which needs none.
+
+**D-Robotics `.bin`.** Choose **RDK X5** (`nash-e`) or **RDK X3**
+(`bernoulli2`). This one cannot be provisioned for you: the OpenExplorer image
+is not publicly pullable. Install Docker inside your distro, download the
+toolchain for your board from `developer.d-robotics.cc`, and load it with
+`docker load -i <archive>.tar`. The app checks for Docker, the daemon, and the
+image, and tells you which is missing rather than failing mid-convert. It always
+quantizes, so an exported dataset is required.
+
+Both write their output beside the checkpoint — `<name>_rknn_model/` or
+`<name>_horizon_<march>/output/`.
 
 - **FP16** roughly halves size and speeds up inference, at a small accuracy cost.
   Measure it rather than assuming it is free.

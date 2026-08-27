@@ -10,3 +10,9 @@ opencv-python>=4.9
 numpy>=1.24
 pillow>=10.0
 pyyaml>=6.0
+
+# ONNX export. ultralytics imports these lazily and would otherwise try to
+# pip-install them mid-export, which a frozen build cannot do.
+onnx>=1.16
+onnxruntime>=1.17
+onnxslim>=0.1.82
