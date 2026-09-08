@@ -303,7 +303,17 @@ def rknn_export_script(model_wsl: str, chip: str, imgsz: int, quantize: int,
     """Run the RKNN export inside the provisioned environment.
 
     ``quantize`` is 8 for INT8 or 16 for a float build, matching ultralytics.
-    INT8 needs a calibration set, which is the project's exported data.yaml.
+    INT8 needs a calibration set, which is the project's exported data.yaml,
+    and it is read from the *train* split.
+
+    Ultralytics calibrates on ``val`` unless told otherwise -- its exporter does
+    ``split = self.args.split or "val"``. Leaving that default had the two SBC
+    targets quantizing against different images, since the D-Robotics path
+    samples train in ``worker._calibration_images``. Val is also the wrong set
+    to draw scales from: it is what the run is scored against, so a model whose
+    quantization was tuned on it reports a flattering mAP. It is usually the
+    smaller split too, which is how a 531-image dataset calibrated on 152 images
+    and tripped ultralytics' own ">300 images recommended" warning.
     """
     if quantize == 8 and not data_yaml_wsl:
         raise WSLError(
@@ -312,7 +322,7 @@ def rknn_export_script(model_wsl: str, chip: str, imgsz: int, quantize: int,
     if chip in RKNN_INT8_ONLY and quantize != 8:
         raise WSLError(f"{chip} has no floating-point support; choose INT8 for this target.")
 
-    data_arg = f", data=r'{data_yaml_wsl}'" if quantize == 8 else ""
+    data_arg = f", data=r'{data_yaml_wsl}', split='train'" if quantize == 8 else ""
     return f"""
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"

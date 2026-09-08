@@ -7,6 +7,8 @@ Everything runs locally — no accounts, no uploads, no cloud training.
 - **Pre-label** with any YOLO checkpoint, then correct instead of drawing from scratch
 - **Finetune** YOLO11 / YOLOv8 / YOLO12 with live loss and mAP curves
 - **Export** the trained model to ONNX, TensorRT, TorchScript or OpenVINO
+- **Convert** for single-board NPUs — `.rknn` for Rockchip/Radxa, `.bin` for
+  D-Robotics RDK — driven through WSL, with or without a project open
 
 ---
 
@@ -108,7 +110,78 @@ ultralytics log update as it runs.
 
 **6. Export.** `Tools → Export trained model` for a deployment format. TensorRT
 is fastest on your RTX card, but the `.engine` file only works on that same GPU
-and driver version.
+and driver version. For a Radxa or RDK board, see
+[Model conversion](#model-conversion) below.
+
+---
+
+## Model conversion
+
+Deployment formats that run on a desktop are built in-process. The two
+single-board NPU targets are not: neither vendor toolchain runs on Windows, so
+the app drives both inside **WSL 2** and reports what is missing rather than
+failing halfway.
+
+| Format | Runs on | Needs |
+| --- | --- | --- |
+| **RKNN** (`.rknn`) | Rockchip NPU — Radxa Rock 5, CM5, and similar | WSL 2; first conversion installs ~1.7 GB |
+| **D-Robotics** (`.bin`) | Horizon BPU — RDK X5, RDK X3 | WSL 2 + Docker + the vendor image |
+
+`Tools → Export or convert a model…` opens with or without a project, so a `.pt`
+from anywhere can be converted — press **Import .pt…** and pick the file.
+
+### RKNN (Radxa / Rockchip)
+
+Choose the chip: `rk3588` (Rock 5, CM5), `rk3576`, `rk3566`/`rk3568`, `rk3562`,
+or the INT8-only `rv1103`/`rv1106`.
+
+The first conversion provisions a Python 3.11 environment inside the distro with
+`rknn-toolkit2` and a CPU build of torch. It takes about ten minutes and roughly
+1.7 GB; every later conversion reuses it and finishes in seconds. The CPU torch
+index is named explicitly, so the ~3 GB of CUDA wheels a graph converter never
+executes stay out.
+
+**FP16** needs no calibration data — the calibration row disappears when you
+pick it. **INT8** does, and quantizing is where the accuracy goes if the
+calibration set is wrong. Point **Calibration data** at either a `data.yaml`
+from a YOLO dataset, or a folder of images, which is the usual case for an
+imported model. Labels are not read; only pixels are sampled, so unlabelled
+images are fine.
+
+Calibration reads the **train** split, and a few hundred images is the working
+minimum — the toolchain itself warns below 300. With a project open the field
+defaults to that project's exported dataset, which is worth overriding whenever
+the model covers a different domain.
+
+### D-Robotics (RDK X5 / X3)
+
+Choose **RDK X5** (`nash-e`) or **RDK X3** (`bernoulli2`). This target always
+quantizes, so an exported dataset is required.
+
+Unlike RKNN, it cannot be provisioned for you — the OpenExplorer image is not
+publicly pullable. Install Docker inside your distro, download the toolchain for
+your board from [developer.d-robotics.cc](https://developer.d-robotics.cc), and
+load it:
+
+```bash
+wsl -d Ubuntu -- docker load -i <archive>.tar
+```
+
+The app checks for Docker, the daemon, and the image separately, and names
+whichever is missing instead of failing mid-convert.
+
+### Output
+
+Both write beside the checkpoint, in the run's `weights/` folder:
+
+```
+<name>_rknn_model/          <name>-<chip>.rknn, metadata.yaml, dataset.txt
+<name>_horizon_<march>/      output/<name>.bin
+```
+
+`dataset.txt` is the calibration manifest the toolchain actually consumed —
+worth a look when an INT8 model behaves worse than the float one, since it says
+exactly which images chose the quantization scales.
 
 ---
 
